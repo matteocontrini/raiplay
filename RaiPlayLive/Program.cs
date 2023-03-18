@@ -1,11 +1,10 @@
-﻿using AngleSharp;
-using AngleSharp.Network.Default;
-using Flurl.Http;
+﻿using Flurl.Http;
 using M3u8Parser;
 using MediaInfo.DotNetWrapper.Enumerations;
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 
@@ -13,29 +12,23 @@ namespace RaiPlayLive
 {
     class Program
     {
-        private static IConfiguration configuration;
-
         static async Task Main(string[] args)
         {
-            string dirette = "https://www.raiplay.it/dirette/";
+            string dirette = "https://www.raiplay.it/dirette.json";
 
-            var requester = new HttpRequester();
-            requester.Headers["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/67.0.3396.87 Safari/537.36 OPR/54.0.2952.64";
-            configuration = Configuration.Default.WithDefaultLoader(requesters: new[] { requester });
-
-            var document = await BrowsingContext.New(configuration).OpenAsync(dirette);
-
-            var htmlLinks = document.QuerySelectorAll(".channel_rai a");
-            var links = htmlLinks;
-            //var links = htmlLinks.Where(x => x.Attributes["href"].Value == "raipremium");
-
-            foreach (var link in links)
+            string json = await dirette.GetStringAsync();
+            
+            JsonDocument document = JsonDocument.Parse(json);
+            
+            var channels = document.RootElement.GetProperty("contents").EnumerateArray();
+            
+            foreach (var channel in channels)
             {
-                string channel = link.Attributes["href"].Value;
+                string name = channel.GetProperty("channel").GetString();
+                string relinkerUrl = channel.GetProperty("video").GetProperty("content_url").GetString();
 
-                Console.WriteLine(channel);
+                Console.WriteLine(name);
 
-                string relinkerUrl = await GetRelinkerUrl(channel);
                 string manifestUrl = await GetManifestUrl(relinkerUrl);
                 string manifestContent = await GetManifest(manifestUrl);
                 var streams = ParseManifest(manifestContent);
@@ -43,7 +36,7 @@ namespace RaiPlayLive
                 // https://stackoverflow.com/a/1616425/1633924
                 string hlsDirectory = new Uri(new Uri(manifestUrl), ".").OriginalString;
 
-                await OutputStreamsInfo(channel, hlsDirectory, streams);
+                await OutputStreamsInfo(name, hlsDirectory, streams);
                 
                 Console.WriteLine();
                 Console.WriteLine("----");
@@ -176,25 +169,14 @@ namespace RaiPlayLive
 
         private static async Task<string> GetManifestUrl(string relinkerUrl)
         {
-            string fullUrl = relinkerUrl + "&output=45&pl=mon,native";
+            string fullUrl = relinkerUrl + "&output=64";
             string xmlContent = await fullUrl.GetStringAsync();
 
-            var match = Regex.Match(xmlContent, "<url type=\"content\">(.+?)</url>");
+            var match = Regex.Match(xmlContent, "<!\\[CDATA\\[(.+?)\\]\\]");
 
             string masterPlaylist = match.Groups[1].Value;
 
             return masterPlaylist;
-        }
-
-        static async Task<string> GetRelinkerUrl(string channel)
-        {
-            string channelUrl = $"https://www.raiplay.it/dirette/{channel}";
-
-            var doc = await BrowsingContext.New(configuration).OpenAsync(channelUrl);
-
-            var relinkerUrl = doc.QuerySelector(".Player").Attributes["data-video-url"].Value;
-
-            return relinkerUrl;
         }
     }
 }
